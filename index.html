@@ -131,6 +131,30 @@ h1{
 }
 .price small{font-weight:400;font-size:10px;color:var(--muted);margin-left:4px;letter-spacing:.06em}
 
+.calibBtn{
+  margin-top:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;
+  background:transparent;color:var(--amber);border:1px solid var(--amber);
+  border-radius:3px;padding:3px 9px;cursor:pointer;letter-spacing:.08em;text-transform:uppercase;
+}
+.calibBtn:hover{background:rgba(232,163,61,.12)}
+.calib{grid-column:1 / -1;display:none;margin-top:10px;padding:12px 14px;
+  border:1px dashed var(--line);border-radius:3px;background:rgba(232,163,61,.04)}
+.calib.open{display:block}
+.calib .frm{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.calib label{display:block;font-family:'IBM Plex Mono',monospace;font-size:10px;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.calib input,.calib select{font-family:'IBM Plex Mono',monospace;font-size:12.5px;
+  background:var(--panel);color:var(--cream);border:1px solid var(--line);border-radius:3px;padding:6px 8px;width:120px}
+.calib select{width:auto}
+.calib button{font-family:'IBM Plex Mono',monospace;font-size:12px;background:var(--amber);
+  color:#14100C;border:1px solid var(--amber);border-radius:3px;padding:7px 12px;cursor:pointer;font-weight:600}
+.calib button.ghost{background:transparent;color:var(--muted);border-color:var(--line);font-weight:400}
+.calib .samples{margin-top:10px;font-family:'IBM Plex Mono',monospace;font-size:11.5px}
+.calib .samples .s{display:flex;gap:12px;align-items:center;padding:2px 0;color:var(--muted)}
+.calib .samples .s b{color:var(--cream);font-weight:500}
+.calib .samples .s button{background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:0 4px}
+.calib .note{margin-top:9px;font-size:11px;color:var(--muted);line-height:1.55;max-width:74ch;font-family:inherit}
+
 /* ---------- footer ---------- */
 footer{margin-top:26px;color:var(--muted);font-size:12.5px;line-height:1.65;max-width:78ch}
 footer a{color:var(--amber);text-decoration:none}
@@ -193,7 +217,7 @@ button.refresh:focus-visible,.chip:focus-visible,select:focus-visible{outline:2p
 </div>
 
 <footer>
-  <p>Live rates come from OpenRouter&rsquo;s open model catalogue and reflect published pay&#8209;as&#8209;you&#8209;go API list prices. Subscription rates and Anthropic extra&#8209;credit rates are not published anywhere as per&#8209;token figures, so the <em>observed</em> entry is an estimate under your control. To change which producers appear, set a permanent flagship model, or adjust the observed multiplier, edit the <code>CONFIG</code> block at the top of this file&rsquo;s script. Dropdown changes last for the session; <code>CONFIG</code> changes are permanent. Auto&#8209;refreshes every thirty minutes.</p>
+  <p>Live rates come from OpenRouter&rsquo;s open model catalogue and reflect published pay&#8209;as&#8209;you&#8209;go API list prices. Subscription rates and Anthropic extra&#8209;credit rates are not published anywhere as per&#8209;token figures, so the <em>observed</em> entry is an estimate under your control &mdash; or, better, a <em>measured</em> rate computed from your own top-ups if a <code>barrel-ledger.json</code> file sits beside this page, or entered directly via each observed row&rsquo;s <em>Calibrate</em> button (saved in this browser). To change which producers appear, set a permanent flagship model, or adjust the observed multiplier, edit the <code>CONFIG</code> block at the top of this file&rsquo;s script. Dropdown changes last for the session; <code>CONFIG</code> changes are permanent. Auto&#8209;refreshes every thirty minutes.</p>
 </footer>
 
 </div>
@@ -212,6 +236,8 @@ button.refresh:focus-visible,.chip:focus-visible,select:focus-visible{outline:2p
 const CONFIG = {
   refreshMinutes: 30,
   defaultBlend: "3",                    // "3", "1", "in", "out"
+  defaultCurrency: "GBP",               // preselected in the Calibrate panel
+  fxRates: { USD: 1, GBP: 1.27, EUR: 1.08 },  // your currency -> USD, for calibration
   providers: [
     { key:"anthropic",  label:"Anthropic", region:"us",     prefix:"anthropic",  flagship:"anthropic/claude-fable-5" },
     { key:"openai",     label:"OpenAI",    region:"us",     prefix:"openai",     flagship:"openai/gpt-5.6-sol" },
@@ -225,7 +251,16 @@ const CONFIG = {
     { key:"mistral",    label:"Mistral",   region:"europe", prefix:"mistralai",  flagship:"mistralai/mistral-medium-3-5" }
   ],
   custom: [
-    { key:"xc", label:"Anthropic", sub:"extra credit, observed", region:"us", basis:"anthropic", multiplier:3.0 }
+    /* ledger: optional path to a JSON file of your real top-ups. When present
+       and readable, the MEASURED rate (money paid / barrels consumed, over the
+       last `window` top-ups) replaces the multiplier estimate. Format:
+       { "currency":"GBP", "fx":1.27,
+         "entries":[ {"date":"2026-07-12","paid":100,"barrels":1.9}, ... ] }
+       paid = amount in `currency`; barrels = million tokens consumed since the
+       previous top-up; fx = your currency -> USD. Falls back to `multiplier`
+       if the file is missing, empty, or the page is opened via file:// . */
+    { key:"xc", label:"Anthropic", sub:"extra credit", region:"us", basis:"anthropic", multiplier:3.0,
+      ledger:"./barrel-ledger.json", window:5 }
     /* fixed-price example:
     { key:"sub", label:"Anthropic", sub:"effective subscription", region:"us", priceIn:3.3, priceOut:16.6 } */
   ]
@@ -308,11 +343,41 @@ function ingest(models){
     }
   }
 }
+let ledgers = {};
+async function loadLedgers(){
+  for (const c of CONFIG.custom || []){
+    if (!c.ledger) continue;
+    try {
+      const res = await fetch(c.ledger, { cache: "no-store" });
+      if (!res.ok) throw 0;
+      const j = await res.json();
+      const fx = (j.currency || "USD") === "USD" ? 1 : (j.fx || 1);
+      const win = (j.entries || []).filter(e => e && e.paid > 0 && e.barrels > 0).slice(-(c.window || 5));
+      if (!win.length) throw 0;
+      const price = win.reduce((s,e) => s + e.paid * fx, 0) / win.reduce((s,e) => s + e.barrels, 0);
+      ledgers[c.key] = { price, n: win.length, last: win[win.length-1].date || "" };
+    } catch(e){ delete ledgers[c.key]; }
+  }
+}
+const store = {
+  _mem: {},
+  get(){ try { return JSON.parse(localStorage.getItem("barrelSamples") || "{}"); } catch(e){ return this._mem; } },
+  set(v){ this._mem = v; try { localStorage.setItem("barrelSamples", JSON.stringify(v)); } catch(e){} }
+};
+function browserLedger(c){
+  const all = (store.get()[c.key] || []).filter(s => s && s.paid > 0 && s.barrels > 0);
+  const win = all.slice(-(c.window || 5));
+  if (!win.length) return null;
+  const fx = cur => (CONFIG.fxRates || {})[cur] || 1;
+  const price = win.reduce((s,e) => s + e.paid * fx(e.cur), 0) / win.reduce((s,e) => s + e.barrels, 0);
+  return { price, n: win.length, last: win[win.length-1].date || "", src: "you" };
+}
 async function load(showBusy){
   const status = document.getElementById("status");
   const statusText = document.getElementById("statusText");
   const banner = document.getElementById("banner");
   if (showBusy) statusText.textContent = "Fetching\u2026";
+  await loadLedgers();
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 12000);
@@ -350,14 +415,19 @@ function computeEntries(){
     out.push({ key:p.key, label:p.label, region:p.region, model:m, modelName:shortName(m), pin, pout, price, custom:false });
   }
   for (const c of CONFIG.custom || []){
-    let pin, pout;
-    if (c.basis && provPrice[c.basis]){
+    let pin, pout, measured = null;
+    const led = browserLedger(c) || ledgers[c.key];
+    if (led && led.price > 0){
+      pin = pout = led.price; measured = led;
+    } else if (c.basis && provPrice[c.basis]){
       pin = provPrice[c.basis].pin * c.multiplier;
       pout = provPrice[c.basis].pout * c.multiplier;
     } else if (c.priceIn != null){
       pin = c.priceIn; pout = c.priceOut != null ? c.priceOut : c.priceIn;
     } else continue;
-    out.push({ key:"custom_"+c.key, label:c.label, sub:c.sub, region:c.region, pin, pout, price:priceOf(pin,pout), custom:true });
+    const price = priceOf(pin, pout);
+    const vsList = (c.basis && provPrice[c.basis]) ? price / provPrice[c.basis].price : null;
+    out.push({ key:"custom_"+c.key, cfgKey:c.key, label:c.label, sub:c.sub, region:c.region, pin, pout, price, custom:true, measured, vsList, mult:c.multiplier });
   }
   return out
     .filter(e => region === "all" || e.region === region)
@@ -373,9 +443,21 @@ function buildRow(e){
   div.dataset.key = e.key;
   const uid = ++uidCounter;
   const regionName = { us:"US", china:"China", europe:"Europe" }[e.region] || e.region;
-  let metaLower;
+  let metaLower, calibPanel = "";
   if (e.custom){
-    metaLower = `<div class="fixedmodel">${e.sub} \u00B7 edit in CONFIG</div>`;
+    metaLower = `<div class="fixedmodel"></div><button class="calibBtn" type="button">Calibrate</button>`;
+    calibPanel = `
+    <div class="calib" role="group" aria-label="Calibrate ${e.label}">
+      <div class="frm">
+        <div><label>Paid</label><input class="cPaid" type="number" min="0" step="0.01" inputmode="decimal" placeholder="100"></div>
+        <div><label>Currency</label><select class="cCur"><option>USD</option><option>GBP</option><option>EUR</option></select></div>
+        <div><label>Barrels it bought (M tokens)</label><input class="cBar" type="number" min="0" step="0.01" inputmode="decimal" placeholder="1.5"></div>
+        <button class="cAdd" type="button">Add sample</button>
+        <button class="cClear ghost" type="button">Clear all</button>
+      </div>
+      <div class="samples"></div>
+      <div class="note">Each sample is one top-up: what you paid and how many barrels (million tokens) it bought before the next top-up. The rate shown is the average of your most recent samples. Samples live in this browser only &mdash; for a portable record, use barrel-ledger.json instead; page samples override the ledger file, which overrides the estimate.</div>
+    </div>`;
   } else {
     metaLower = `<select class="model" aria-label="Model for ${e.label}"></select>`;
   }
@@ -388,11 +470,43 @@ function buildRow(e){
       ${metaLower}
       <div class="inout"></div>
     </div>
-    <div class="track"><div class="bar"><span class="price"></span></div></div>`;
+    <div class="track"><div class="bar"><span class="price"></span></div></div>${calibPanel}`;
   div._uid = uid;
   if (!e.custom){
     const sel = div.querySelector("select.model");
     sel.addEventListener("change", () => { selection[e.key] = sel.value; render(); });
+  } else {
+    const panel = div.querySelector(".calib");
+    const listEl = panel.querySelector(".samples");
+    const cfgKey = e.cfgKey, win = (CONFIG.custom.find(c => c.key === cfgKey) || {}).window || 5;
+    const redraw = () => {
+      const all = store.get()[cfgKey] || [];
+      listEl.innerHTML = all.length
+        ? all.slice(-8).map((s,i,arr) => {
+            const idx = all.length - arr.length + i;
+            const inWin = idx >= all.length - win;
+            return `<div class="s"><span>${s.date}</span><b>${s.paid} ${s.cur}</b><span>\u2192</span><b>${s.barrels} bbl</b>${inWin ? "" : "<span>(outside average)</span>"}<button type="button" data-i="${idx}" aria-label="Remove sample">\u00D7</button></div>`;
+          }).join("")
+        : `<div class="s">No samples yet.</div>`;
+      listEl.querySelectorAll("button[data-i]").forEach(b => b.addEventListener("click", () => {
+        const all2 = store.get(); (all2[cfgKey] || []).splice(parseInt(b.dataset.i), 1); store.set(all2); redraw(); render();
+      }));
+    };
+    panel.querySelector(".cCur").value = CONFIG.defaultCurrency || "USD";
+    div.querySelector(".calibBtn").addEventListener("click", () => { panel.classList.toggle("open"); redraw(); });
+    panel.querySelector(".cAdd").addEventListener("click", () => {
+      const paid = parseFloat(panel.querySelector(".cPaid").value);
+      const bar  = parseFloat(panel.querySelector(".cBar").value);
+      if (!(paid > 0) || !(bar > 0)) return;
+      const all = store.get(); (all[cfgKey] = all[cfgKey] || []).push({
+        date: new Date().toISOString().slice(0,10), paid, cur: panel.querySelector(".cCur").value, barrels: bar });
+      store.set(all);
+      panel.querySelector(".cPaid").value = ""; panel.querySelector(".cBar").value = "";
+      redraw(); render();
+    });
+    panel.querySelector(".cClear").addEventListener("click", () => {
+      const all = store.get(); delete all[cfgKey]; store.set(all); redraw(); render();
+    });
   }
   return div;
 }
@@ -403,7 +517,22 @@ function updateRow(div, e){
   bar.style.width = (f*100).toFixed(2) + "%";
   bar.style.setProperty("--barcolor", color);
   div.querySelector(".price").innerHTML = money(e.price) + "<small>/bbl</small>";
-  div.querySelector(".inout").textContent = "in " + money(e.pin) + " \u00B7 out " + money(e.pout);
+  if (e.custom){
+    const fixed = div.querySelector(".fixedmodel");
+    if (e.measured){
+      const you = e.measured.src === "you";
+      fixed.textContent = (you ? "calibrated \u00B7 " : "measured \u00B7 ") + e.measured.n +
+        (you ? " sample" : " top-up") + (e.measured.n > 1 ? "s" : "") +
+        (e.measured.last ? " \u00B7 last " + e.measured.last : "");
+      div.querySelector(".inout").textContent = "effective rate from " + (you ? "your samples" : "ledger file") +
+        (e.vsList ? " \u00B7 \u00D7" + e.vsList.toFixed(1) + " list" : "");
+    } else {
+      fixed.textContent = e.sub + " \u00B7 est \u00D7" + e.mult + " list \u00B7 edit in CONFIG";
+      div.querySelector(".inout").textContent = "in " + money(e.pin) + " \u00B7 out " + money(e.pout);
+    }
+  } else {
+    div.querySelector(".inout").textContent = "in " + money(e.pin) + " \u00B7 out " + money(e.pout);
+  }
   if (!e.custom){
     const sel = div.querySelector("select.model");
     const list = catalogue[e.key] || [];
