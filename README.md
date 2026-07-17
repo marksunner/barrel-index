@@ -4,6 +4,8 @@
 
 A single, self-contained HTML file that shows you, live, what every major AI producer is currently charging per million tokens, racked like a commodity board with the most expensive barrel at the top. No build step, no dependencies, no API key, no server-side anything. Download the file, open it in a browser, or drop it on any static web server, including one running entirely inside your own network.
 
+![The Barrel Index](screenshot.jpg)
+
 ## Why this exists
 
 The world has quietly become a commodity market for intelligence, and most of us are buying barrels of it without a price board. If you run AI agents that you fund out of your own pocket, you are exposed to that market directly, and the spread is enormous: at the time of writing, the most expensive barrel on the board costs more than a hundred times the cheapest one. But prices move constantly, new producers appear monthly, and it is remarkably easy to be confidently wrong about who is charging what, because the numbers live scattered across pricing pages that all format things differently. This tool exists so that one glance replaces all of that. It was built by a home user who was funding always-on agents out of household money, realised he no longer trusted his own assumptions about who was most expensive, and wanted an impartial instrument on the wall instead.
